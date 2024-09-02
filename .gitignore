@@ -1,0 +1,8 @@
+# Python environment files
+.venv/
+
+# macOS config files
+.DS_Store
+
+# JetBrains config files
+.idea/

@@ -16,7 +16,7 @@ nordvpn-password
 
 After cloning the repository on your local machine with 
 ```shell
-git clone https://github.com/niccolozanotti/ -b master
+git clone https://github.com/niccolozanotti/ -b main
 ```
 create a local python environment `.venv` and activate it:
 ```shell

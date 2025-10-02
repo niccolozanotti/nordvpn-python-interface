@@ -1,8 +1,11 @@
 import subprocess
 import json
 import os
+import sys
 import time
 import requests
+import random
+import glob
 from typing import Optional
 
 
@@ -20,7 +23,23 @@ def check_command(command: str) -> bool:
 
 
 def public_ip() -> str:
-    return requests.get("https://ipinfo.io").text
+    try:
+        response = requests.get("https://ipinfo.io")
+        if response.status_code == 200:
+            data = response.json()
+            # Format the IP information in a cleaner way
+            ip_info = f"IP: {data.get('ip', 'Unknown')}"
+            if 'city' in data and 'region' in data:
+                ip_info += f" | Location: {data['city']}, {data['region']}"
+            if 'country' in data:
+                ip_info += f" | Country: {data['country']}"
+            if 'org' in data:
+                ip_info += f" | ISP: {data['org']}"
+            return ip_info
+        else:
+            return f"Failed to get IP info (HTTP {response.status_code})"
+    except Exception as e:
+        return f"Error fetching IP info: {e}"
 
 
 def get_nordvpn_server(country_name: str = "United States") -> Optional[str]:
@@ -62,23 +81,87 @@ def get_nordvpn_server(country_name: str = "United States") -> Optional[str]:
         print_error("Warning: use the server from the closest location/country")
         return None
 
-    url = f"https://nordvpn.com/wp-admin/admin-ajax.php?action=servers_recommendations&filters={{\"country_id\":{country_id}}}"
-    response = requests.get(url)
-    if response.status_code != 200:
-        print_error(f"Failed to get server recommendations: HTTP {response.status_code}")
-        return None
-
-    try:
-        server_name = response.json()[0]["hostname"]
-    except (json.JSONDecodeError, IndexError, KeyError):
-        print_error(f"Server name not found for {country_name}")
-        return None
-
-    return f"{server_name}.tcp"
+    # Since the API endpoint is returning 403, use a fallback approach
+    # Randomly select from available servers in the specified country
+    
+    # Map country names to their 2-letter country codes for file matching
+    country_code_map = {
+        "united states": "us",
+        "united kingdom": "uk", 
+        "germany": "de",
+        "france": "fr",
+        "canada": "ca",
+        "australia": "au",
+        "japan": "jp",
+        "netherlands": "nl",
+        "sweden": "se",
+        "norway": "no",
+        "switzerland": "ch",
+        "singapore": "sg",
+        "brazil": "br",
+        "mexico": "mx",
+        "spain": "es",
+        "italy": "it",
+        "poland": "pl",
+        "czech republic": "cz",
+        "finland": "fi",
+        "denmark": "dk",
+        "belgium": "be",
+        "austria": "at",
+        "portugal": "pt",
+        "ireland": "ie",
+        "new zealand": "nz",
+        "south korea": "kr",
+        "hong kong": "hk",
+        "india": "in",
+        "south africa": "za",
+        "turkey": "tr",
+        "israel": "il",
+        "ukraine": "ua",
+        "romania": "ro",
+        "bulgaria": "bg",
+        "croatia": "hr",
+        "slovenia": "si",
+        "slovakia": "sk",
+        "hungary": "hu",
+        "latvia": "lv",
+        "lithuania": "lt",
+        "estonia": "ee",
+        "greece": "gr",
+        "cyprus": "cy",
+        "malta": "mt",
+        "luxembourg": "lu",
+        "iceland": "is"
+    }
+    
+    country_code = country_code_map.get(country_name.lower())
+    if country_code is None:
+        print_error(f"Country '{country_name}' not supported. Using default US server.")
+        country_code = "us"
+    
+    # Find all available servers for this country
+    nordvpn_dir = os.path.expanduser("~/.nordvpn_configs/ovpn_tcp")
+    pattern = f"{nordvpn_dir}/{country_code}*.nordvpn.com.tcp.ovpn"
+    available_servers = glob.glob(pattern)
+    
+    if not available_servers:
+        print_error(f"No servers found for {country_name}. Using default US server.")
+        # Fallback to US servers
+        pattern = f"{nordvpn_dir}/us*.nordvpn.com.tcp.ovpn"
+        available_servers = glob.glob(pattern)
+        if not available_servers:
+            print_error("No US servers found either. Please check your NordVPN config files.")
+            return None
+    
+    # Randomly select a server
+    selected_server = random.choice(available_servers)
+    server_name = os.path.basename(selected_server).replace('.nordvpn.com.tcp.ovpn', '')
+    
+    return f"{server_name}.nordvpn.com.tcp"
 
 
 def connect_nordvpn(cred_file_path: str, country_name: str = "United States") -> None:
-    disconnect_nordvpn()
+    disconnect_nordvpn(quiet=True)
 
     for cmd in ["openvpn", "mkdir", "unzip", "rm", "sleep"]:
         if not check_command(cmd):
@@ -93,15 +176,17 @@ def connect_nordvpn(cred_file_path: str, country_name: str = "United States") ->
     if not server_name:
         return
 
-    if not os.path.isdir("/etc/nordvpn_file"):
-        os.makedirs("/etc/nordvpn_file", exist_ok=True)
+    # Use a local directory instead of /etc to avoid permission issues
+    nordvpn_dir = os.path.expanduser("~/.nordvpn_configs")
+    if not os.path.isdir(nordvpn_dir):
+        os.makedirs(nordvpn_dir, exist_ok=True)
         subprocess.run(["curl", "-fsSL", "https://downloads.nordcdn.com/configs/archives/servers/ovpn.zip", "-o",
-                        "/etc/nordvpn_file/ovpn.zip"], check=True)
-        subprocess.run(["unzip", "-qq", "/etc/nordvpn_file/ovpn.zip", "-d", "/etc/nordvpn_file/"], check=True)
-        os.remove("/etc/nordvpn_file/ovpn.zip")
-        subprocess.run(["rm", "-rf", "/etc/nordvpn_file/ovpn_udp/"], check=True)
+                        f"{nordvpn_dir}/ovpn.zip"], check=True)
+        subprocess.run(["unzip", "-qq", f"{nordvpn_dir}/ovpn.zip", "-d", nordvpn_dir], check=True)
+        os.remove(f"{nordvpn_dir}/ovpn.zip")
+        subprocess.run(["rm", "-rf", f"{nordvpn_dir}/ovpn_udp/"], check=True)
 
-    ovpn_file = f"/etc/nordvpn_file/ovpn_tcp/{server_name}.ovpn"
+    ovpn_file = f"{nordvpn_dir}/ovpn_tcp/{server_name}.ovpn"
     if not os.path.isfile(ovpn_file):
         print_error(f"{ovpn_file} not found")
         return
@@ -110,22 +195,55 @@ def connect_nordvpn(cred_file_path: str, country_name: str = "United States") ->
         subprocess.run(["sudo", "openvpn", "--config", ovpn_file, "--auth-user-pass", cred_file_path, "--daemon"],
                        check=True)
         print_green(f"Connected to {server_name}")
+        print("Waiting for connection to stabilize...")
         time.sleep(5)
+        print("Fetching your new IP address...")
         print_green(public_ip())
     except subprocess.CalledProcessError:
         print_error(f"Cannot connect to {server_name}")
 
 
-def disconnect_nordvpn() -> None:
+def disconnect_nordvpn(quiet: bool = False) -> None:
     if not check_command("pkill"):
         print_error("pkill not found. Install it with `brew install proctools`")
         return
 
+    # Check if any openvpn process is running before attempting to disconnect
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "openvpn"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            if not quiet:
+                print_green("No active VPN connection found.")
+            return
+    except Exception as e:
+        print_error(f"Error checking openvpn process: {e}")
+        return
+
     try:
         subprocess.run(["sudo", "pkill", "openvpn"], check=True)
-        print_green("NordVPN is disconnected")
+        print_green("NordVPN is disconnected.")
     except subprocess.CalledProcessError:
-        print_error("NordVPN is not disconnected")
+        # If pkill fails, check again if openvpn is still running
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "openvpn"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                if not quiet:
+                    print_green("No active VPN connection found.")
+                pass
+            else:
+                print_error("Failed to disconnect NordVPN. openvpn process may still be running.")
+        except Exception as e:
+            print_error(f"Error verifying openvpn process after disconnect attempt: {e}")
 
 
 if __name__ == "__main__":
@@ -133,15 +251,19 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print("Usage: python script.py [connect|disconnect] [cred_file_path] [country_name]")
+        print("Note: If no country is specified, defaults to 'United States'")
         sys.exit(1)
 
     action = sys.argv[1]
     if action == "connect":
         if len(sys.argv) < 3:
             print("Usage: python script.py connect cred_file_path [country_name]")
+            print("Note: If no country is specified, defaults to 'United States'")
             sys.exit(1)
         cred_file_path = sys.argv[2]
+        # Default to United States if no country is provided
         country_name = sys.argv[3] if len(sys.argv) > 3 else "United States"
+        print(f"Connecting to NordVPN server in: {country_name}")
         connect_nordvpn(cred_file_path, country_name)
     elif action == "disconnect":
         disconnect_nordvpn()
